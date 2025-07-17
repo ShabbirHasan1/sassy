@@ -1,7 +1,6 @@
 //! The basic bitpacking algorithm from Myers'99.
-use std::simd::{LaneCount, Simd, SupportedLaneCount};
-
 use crate::{
+    S,
     delta_encoding::{HEncoding, VEncoding},
     profiles::Profile,
 };
@@ -28,7 +27,6 @@ use crate::{
 ///
 /// 20 operations, excluding `eq`.
 #[inline(always)]
-#[allow(unused)] // TODO: Drop this
 pub fn compute_block<P: Profile, H: HEncoding<u64>, V: VEncoding<u64>>(
     h0: &mut H,
     v: &mut V,
@@ -68,15 +66,7 @@ pub fn compute_block<P: Profile, H: HEncoding<u64>, V: VEncoding<u64>>(
 ///
 /// This assumes HEncoding of `(u64,u64)`.
 #[inline(always)]
-pub fn compute_block_simd<const L: usize>(
-    hp0: &mut Simd<u64, L>,
-    hm0: &mut Simd<u64, L>,
-    vp: &mut Simd<u64, L>,
-    vm: &mut Simd<u64, L>,
-    eq: Simd<u64, L>,
-) where
-    LaneCount<L>: SupportedLaneCount,
-{
+pub fn compute_block_simd(hp0: &mut S, hm0: &mut S, vp: &mut S, vm: &mut S, eq: S) {
     let vx = eq | *vm;
     let eq = eq | *hm0;
     // The add here contains the 'folding' magic that makes this algorithm
@@ -90,12 +80,12 @@ pub fn compute_block_simd<const L: usize>(
     let hmw = hm >> right_shift;
 
     // Push `hw` out of `ph` and `mh` and shift in `h0`.
-    let left_shift = Simd::splat(1);
-    let hp = (hp << left_shift) | *hp0;
-    let hm = (hm << left_shift) | *hm0;
+    let hp = (hp << 1) | *hp0;
+    let hm = (hm << 1) | *hm0;
 
     *hp0 = hpw;
     *hm0 = hmw;
-    *vp = hm | !(vx | hp);
+    let tmp: S = vx | hp;
+    *vp = hm | !tmp;
     *vm = hp & vx;
 }

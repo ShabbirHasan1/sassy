@@ -1,7 +1,3 @@
-#![feature(portable_simd)]
-
-use std::simd::Simd;
-
 mod bitpacking;
 mod delta_encoding;
 
@@ -33,6 +29,9 @@ pub mod private {
 
 #[cfg(feature = "avx512")]
 const LANES: usize = 8;
+#[cfg(feature = "avx512")]
+type S = wide::u64x8;
 #[cfg(not(feature = "avx512"))]
 const LANES: usize = 4;
-type S = Simd<u64, LANES>;
+#[cfg(not(feature = "avx512"))]
+type S = wide::u64x4;

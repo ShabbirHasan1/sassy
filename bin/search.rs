@@ -1,4 +1,4 @@
-use needletail::parse_fastx_file;
+use needletail::{FastxReader, parse_fastx_file};
 use sassy::rec_iter::{Query, RecordIterator};
 use sassy::{
     profiles::{Ascii, Dna, Iupac, Profile},

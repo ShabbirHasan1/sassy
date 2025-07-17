@@ -1,11 +1,7 @@
 use crate::profiles::Profile;
-use std::{
-    mem::transmute,
-    simd::{
-        cmp::{SimdPartialEq, SimdPartialOrd},
-        u8x32,
-    },
-};
+use std::mem::transmute;
+
+use wide::{CmpEq, CmpGe, CmpLe, u8x32};
 
 #[derive(Clone, Debug)]
 pub struct Ascii<const CASE_SENSITIVE: bool = true> {
@@ -74,15 +70,15 @@ impl<const CASE_SENSITIVE: bool> Profile for Ascii<CASE_SENSITIVE> {
 #[inline(always)]
 pub fn ascii_u64_search(seq: &[u8; 64], bases: &[u8], out: &mut [u64]) {
     unsafe {
-        let chunk0 = u8x32::from_array(seq[0..32].try_into().unwrap());
-        let chunk1 = u8x32::from_array(seq[32..64].try_into().unwrap());
+        let chunk0 = u8x32::new(seq[0..32].try_into().unwrap());
+        let chunk1 = u8x32::new(seq[32..64].try_into().unwrap());
 
         for (i, &base) in bases.iter().enumerate() {
             let m = u8x32::splat(base);
-            let eq0 = chunk0.simd_eq(m);
-            let eq1 = chunk1.simd_eq(m);
-            let low = eq0.to_bitmask();
-            let high = eq1.to_bitmask();
+            let eq0 = chunk0.cmp_eq(m);
+            let eq1 = chunk1.cmp_eq(m);
+            let low = eq0.move_mask() as u64;
+            let high = eq1.move_mask() as u64;
             *out.get_unchecked_mut(i) = (high << 32) | low;
         }
     }
@@ -92,14 +88,14 @@ pub fn ascii_u64_search(seq: &[u8; 64], bases: &[u8], out: &mut [u64]) {
 #[inline(always)]
 fn ascii_u64_search_case_insensitive(seq: &[u8; 64], bases: &[u8], out: &mut [u64]) {
     unsafe {
-        let chunk0 = u8x32::from_array(seq[0..32].try_into().unwrap());
-        let chunk1 = u8x32::from_array(seq[32..64].try_into().unwrap());
+        let chunk0 = u8x32::new(seq[0..32].try_into().unwrap());
+        let chunk1 = u8x32::new(seq[32..64].try_into().unwrap());
 
         const A: u8 = b'A';
         const Z: u8 = b'Z';
         let to_lowercase = b'a' - b'A';
-        let is_char0 = chunk0.simd_ge(u8x32::splat(A)) & chunk0.simd_le(u8x32::splat(Z));
-        let is_char1 = chunk1.simd_ge(u8x32::splat(A)) & chunk1.simd_le(u8x32::splat(Z));
+        let is_char0 = chunk0.cmp_ge(u8x32::splat(A)) & chunk0.cmp_le(u8x32::splat(Z));
+        let is_char1 = chunk1.cmp_ge(u8x32::splat(A)) & chunk1.cmp_le(u8x32::splat(Z));
         // Transmute from i8x32 to u8x32
         let lower0 =
             chunk0 | (u8x32::splat(to_lowercase) & transmute::<_, u8x32>(is_char0.to_int()));

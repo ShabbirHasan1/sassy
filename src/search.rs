@@ -8,7 +8,6 @@ use crate::{
 };
 use pa_types::{Cigar, CigarOp, Cost, Pos};
 use std::borrow::Cow;
-use std::simd::cmp::SimdPartialOrd;
 
 pub type Deltas = Vec<(Cost, V<u64>)>;
 
@@ -326,13 +325,13 @@ impl<P: Profile> Searcher<P> {
     ) -> Option<usize> {
         for lane in 0..LANES {
             // Get the current cost state for this lane
-            let v = V(vp.as_array()[lane], vm.as_array()[lane]);
+            let v = V(vp.as_array_ref()[lane], vm.as_array_ref()[lane]);
 
             // Calculate the minimum possible cost in this lane
             // This is the best case scenario - if even this minimum is > k,
             // then no matches are possible in this lane
             let min_in_lane =
-                prefix_min(v.0, v.1).0 as Cost + dist_to_start_of_lane.as_array()[lane] as Cost;
+                prefix_min(v.0, v.1).0 as Cost + dist_to_start_of_lane.as_array_ref()[lane] as Cost;
 
             if min_in_lane <= k {
                 // Promising lane, we "estimate" how many rows more we need to check
@@ -416,7 +415,7 @@ impl<P: Profile> Searcher<P> {
                 dist_to_start_of_lane -= self.hm[j];
 
                 let query_char = unsafe { query_profile.get_unchecked(j) };
-                let eq: std::simd::Simd<u64, 4> = S::from(std::array::from_fn(|lane| {
+                let eq = S::from(std::array::from_fn(|lane| {
                     P::eq(query_char, &self.lanes[lane].text_profile)
                 }));
 
@@ -429,8 +428,8 @@ impl<P: Profile> Searcher<P> {
                     dist_to_end_of_lane -= self.hm[j];
 
                     // Check if any lane has cost <= k at the current row
-                    let cmp = dist_to_end_of_lane.simd_le(S::splat(k as u64));
-                    let bitmask = cmp.to_bitmask();
+                    let cmp = dist_to_end_of_lane.cmp_lt(S::splat(k as u64 + 1));
+                    let bitmask = unsafe { std::mem::transmute::<S, wide::i64x4>(cmp) }.move_mask();
                     let end_leq_k = bitmask != 0;
 
                     // Track the highest row where we found any promising matches
@@ -464,9 +463,12 @@ impl<P: Profile> Searcher<P> {
 
             // Save positions with cost <= k directly after processing each row
             for lane in 0..LANES {
-                let v = <V<u64> as VEncoding<u64>>::from(vp[lane], vm[lane]);
+                let v = <V<u64> as VEncoding<u64>>::from(
+                    vp.as_array_ref()[lane],
+                    vm.as_array_ref()[lane],
+                );
                 let base_pos = self.lanes[lane].chunk_offset * 64 + 64 * i;
-                let cost = dist_to_start_of_lane.as_array()[lane] as Cost;
+                let cost = dist_to_start_of_lane.as_array_ref()[lane] as Cost;
 
                 self.find_minima_with_overhang(
                     v,
@@ -804,7 +806,7 @@ pub(crate) fn init_deltas_for_overshoot(hp: &mut [S], alpha: Option<f32>) {
             // Alternate 0 and 1 costs at very left of the matrix.
             // (Note: not at start of later chunks.)
             // FIXME: floor, round, or ceil?
-            hp[i].as_mut_array()[0] =
+            hp[i].as_array_mut()[0] =
                 (((i + 1) as f32) * alpha).floor() as u64 - ((i as f32) * alpha).floor() as u64;
         }
     }
@@ -820,7 +822,7 @@ pub(crate) fn init_deltas_for_overshoot_all_lanes(hp: &mut [S], alpha: Option<f3
             // FIXME: floor, round, or ceil?
             let bit =
                 (((i + 1) as f32) * alpha).floor() as u64 - ((i as f32) * alpha).floor() as u64;
-            hp[i].as_mut_array().fill(bit);
+            hp[i].as_array_mut().fill(bit);
         }
     }
 }

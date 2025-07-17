@@ -28,6 +28,7 @@ needletail = "0.6.3"
 thread-id = "5.0.0"
 
 pyo3 = { version = "0.25", features = ["extension-module"], optional = true }
+wide = "0.7.33"
 
 [features]
 avx512 = []

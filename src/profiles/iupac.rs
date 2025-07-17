@@ -1,13 +1,20 @@
 use crate::profiles::Profile;
-use std::{
-    arch::x86_64::*,
-    mem::transmute,
-    simd::{cmp::SimdPartialOrd, u8x32},
-};
+use std::{arch::x86_64::*, mem::transmute};
+use wide::{CmpEq, CmpGe, CmpGt, CmpLt, u8x32};
 
 #[derive(Clone, Debug)]
 pub struct Iupac {
     bases: Vec<u8>,
+}
+
+fn cmp_gt(a: u8x32, b: u8x32) -> u8x32 {
+    let high_bit = u8x32::splat(1 << 7);
+    unsafe {
+        transmute(_mm256_cmpgt_epi8(
+            transmute(a ^ high_bit),
+            transmute(b ^ high_bit),
+        ))
+    }
 }
 
 impl Profile for Iupac {
@@ -34,18 +41,18 @@ impl Profile for Iupac {
         unsafe {
             let zero = u8x32::splat(0);
             let mask4 = u8x32::splat(0x0F);
-            let tbl256 = u8x32::from_array(transmute([PACKED_NIBBLES, PACKED_NIBBLES]));
+            let tbl256 = u8x32::new(transmute([PACKED_NIBBLES, PACKED_NIBBLES]));
 
-            let chunk0 = u8x32::from_array(b[0..32].try_into().unwrap());
-            let chunk1 = u8x32::from_array(b[32..64].try_into().unwrap());
+            let chunk0 = u8x32::new(b[0..32].try_into().unwrap());
+            let chunk1 = u8x32::new(b[32..64].try_into().unwrap());
 
             let idx5_0 = chunk0 & u8x32::splat(0x1F);
             let idx5_1 = chunk1 & u8x32::splat(0x1F);
             let low4_0 = idx5_0 & mask4;
             let low4_1 = idx5_1 & mask4;
 
-            let is_hi_0 = idx5_0.simd_ge(u8x32::splat(15));
-            let is_hi_1 = idx5_1.simd_ge(u8x32::splat(15));
+            let is_hi_0 = cmp_gt(idx5_0, u8x32::splat(15));
+            let is_hi_1 = cmp_gt(idx5_1, u8x32::splat(15));
 
             let shuffled0: u8x32 =
                 transmute(_mm256_shuffle_epi8(transmute(tbl256), transmute(low4_0)));
@@ -58,17 +65,17 @@ impl Profile for Iupac {
             let hi_nib0 = shuffled0 >> 4;
             let hi_nib1 = shuffled1 >> 4;
 
-            let nib0 = is_hi_0.select(hi_nib0, lo_nib0);
-            let nib1 = is_hi_1.select(hi_nib1, lo_nib1);
+            let nib0 = is_hi_0.blend(hi_nib0, lo_nib0);
+            let nib1 = is_hi_1.blend(hi_nib1, lo_nib1);
 
             for (i, &base) in [b'A', b'C', b'T', b'G'].iter().enumerate() {
                 let m = u8x32::splat(get_encoded(base));
 
-                let match0 = (nib0 & m).simd_gt(zero);
-                let match1 = (nib1 & m).simd_gt(zero);
+                let match0 = (nib0 & m).cmp_eq(zero);
+                let match1 = (nib1 & m).cmp_eq(zero);
 
-                let low = match0.to_bitmask() as u64;
-                let high = match1.to_bitmask() as u64;
+                let low = !match0.move_mask() as u64;
+                let high = !match1.move_mask() as u64;
 
                 *out.get_unchecked_mut(i) = (high << 32) | low;
             }
@@ -76,11 +83,11 @@ impl Profile for Iupac {
             for (i, &base) in extra_bases.iter().enumerate() {
                 let m = u8x32::splat(get_encoded(base));
 
-                let match0 = (nib0 & m).simd_gt(zero);
-                let match1 = (nib1 & m).simd_gt(zero);
+                let match0 = (nib0 & m).cmp_eq(zero);
+                let match1 = (nib1 & m).cmp_eq(zero);
 
-                let low = match0.to_bitmask() as u64;
-                let high = match1.to_bitmask() as u64;
+                let low = !match0.move_mask() as u64;
+                let high = !match1.move_mask() as u64;
 
                 *out.get_unchecked_mut(i + 4) = (high << 32) | low;
             }
@@ -115,30 +122,30 @@ impl Profile for Iupac {
         let mut i = 0;
         unsafe {
             let mask4 = V::splat(0x0F);
-            let tbl256 = V::from_array(transmute([
+            let tbl256 = V::new(transmute([
                 PACKED_NIBBLES_INDICATOR,
                 PACKED_NIBBLES_INDICATOR,
             ]));
             while i + LANES <= len {
-                let chunk = V::from_slice(&seq[i..i + LANES]);
+                let chunk = V::try_from(&seq[i..i + LANES]).unwrap();
                 let upper = chunk & V::splat(!0x20);
 
                 // Check if >= '@' (64) (=b'A'-1) and < 128.
-                let in_range = upper.simd_ge(V::splat(64)) & upper.simd_lt(V::splat(128));
+                let in_range = upper.cmp_ge(V::splat(64)) & upper.cmp_lt(V::splat(128));
                 if !in_range.all() {
                     return false;
                 }
 
                 let idx5 = upper & V::splat(0x1F);
                 let low4 = idx5 & mask4;
-                let is_hi = idx5.simd_ge(V::splat(16));
+                let is_hi = idx5.cmp_ge(V::splat(16));
                 let shuffled: V =
                     transmute(_mm256_shuffle_epi8(transmute(tbl256), transmute(low4)));
                 let lo_nib = shuffled & mask4;
                 let hi_nib = shuffled >> 4;
                 let nib = is_hi.select(hi_nib, lo_nib);
 
-                if !nib.simd_gt(V::splat(0)).all() {
+                if !nib.cmp_gt(V::splat(0)).all() {
                     return false;
                 }
 
